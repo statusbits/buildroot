@@ -9,7 +9,8 @@ CTEKDIAG_VERSION=R1_0_0
 # The filename of the package to download.
 CTEKDIAG_SOURCE=apps-ctekdiag-$(CTEKDIAG_VERSION).tar.gz
 # The site and path to where the source packages are.
-CTEKDIAG_SITE=http://support.ctekproducts.com/source
+#CTEKDIAG_SITE=http://support.ctekproducts.com/source
+CTEKDIAG_SITE=https://github.com/statusbits/statusbits.github.io/raw/master/archive
 # The directory which the source package is extracted to.
 CTEKDIAG_BASEDIR=$(BUILD_DIR)/apps/ctekdiag
 CTEKDIAG_DIR=$(CTEKDIAG_BASEDIR)-$(CTEKDIAG_VERSION)

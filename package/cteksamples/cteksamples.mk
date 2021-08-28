@@ -9,7 +9,8 @@ CTEKSAMPLES_VERSION=R1_0_0
 # The filename of the package to download.
 CTEKSAMPLES_SOURCE=apps-cteksamples-$(CTEKSAMPLES_VERSION).tar.gz
 # The site and path to where the source packages are.
-CTEKSAMPLES_SITE=http://support.ctekproducts.com/source
+#CTEKSAMPLES_SITE=http://support.ctekproducts.com/source
+CTEKSAMPLES_SITE=https://github.com/statusbits/statusbits.github.io/raw/master/archive
 # The directory which the source package is extracted to.
 CTEKSAMPLES_BASEDIR=$(BUILD_DIR)/apps/cteksamples
 CTEKSAMPLES_DIR=$(CTEKSAMPLES_BASEDIR)-$(CTEKSAMPLES_VERSION)

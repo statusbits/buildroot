@@ -9,7 +9,8 @@ VFTPD_VERSION=R1_2_8
 # The filename of the package to download.
 VFTPD_SOURCE=apps-vftpd-$(VFTPD_VERSION).tar.gz
 # The site and path to where the source packages are.
-VFTPD_SITE=http://support.ctekproducts.com/source
+#VFTPD_SITE=http://support.ctekproducts.com/source
+VFTPD_SITE=https://github.com/statusbits/statusbits.github.io/raw/master/archive
 # The directory which the source package is extracted to.
 VFTPD_BASEDIR=$(BUILD_DIR)/apps/vftpd
 VFTPD_DIR=$(VFTPD_BASEDIR)-$(VFTPD_VERSION)

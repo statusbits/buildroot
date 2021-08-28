@@ -9,7 +9,8 @@ RESPAWND_INIT_VERSION=R1_0_2
 # The filename of the package to download.
 RESPAWND_INIT_SOURCE=packages-initscripts-respawnd-$(RESPAWND_INIT_VERSION).tar.gz
 # The site and path to where the source packages are.
-RESPAWND_INIT_SITE=http://support.ctekproducts.com/source
+#RESPAWND_INIT_SITE=http://support.ctekproducts.com/source
+RESPAWND_INIT_SITE=https://github.com/statusbits/statusbits.github.io/raw/master/archive
 # The directory which the source package is extracted to.
 RESPAWND_INIT_DIR=$(BUILD_DIR)/packages/initscripts/respawnd-$(RESPAWND_INIT_VERSION)
 # Which decompression to use, BZCAT or ZCAT.

@@ -9,7 +9,8 @@ VFTPD_INIT_VERSION=R1_3_1
 # The filename of the package to download.
 VFTPD_INIT_SOURCE=packages-initscripts-vftpd-$(VFTPD_INIT_VERSION).tar.gz
 # The site and path to where the source packages are.
-VFTPD_INIT_SITE=http://support.ctekproducts.com/source
+#VFTPD_INIT_SITE=http://support.ctekproducts.com/source
+VFTPD_INIT_SITE=https://github.com/statusbits/statusbits.github.io/raw/master/archive
 # The directory which the source package is extracted to.
 VFTPD_INIT_DIR=$(BUILD_DIR)/packages/initscripts/vftpd-$(VFTPD_INIT_VERSION)
 # Which decompression to use, BZCAT or ZCAT.

@@ -9,7 +9,8 @@ TELNETD_INIT_VERSION=R1_0_0
 # The filename of the package to download.
 TELNETD_INIT_SOURCE=packages-initscripts-telnetd-$(TELNETD_INIT_VERSION).tar.gz
 # The site and path to where the source packages are.
-TELNETD_INIT_SITE="http://support.ctekproducts.com/source"
+#TELNETD_INIT_SITE="http://support.ctekproducts.com/source"
+TELNETD_INIT_SITE=https://github.com/statusbits/statusbits.github.io/raw/master/archive
 # The directory which the source package is extracted to.
 TELNETD_INIT_DIR=$(BUILD_DIR)/packages/initscripts/telnetd-$(TELNETD_INIT_VERSION)
 # Which decompression to use, BZCAT or ZCAT.

@@ -5,7 +5,8 @@
 #############################################################
 LIBFDIPC_VERSION=R1_1_1
 LIBFDIPC_SOURCE=libs-libfdipc-$(LIBFDIPC_VERSION).tar.bz2
-LIBFDIPC_SITE="http://support.ctekproducts.com/source"
+#LIBFDIPC_SITE="http://support.ctekproducts.com/source"
+LIBFDIPC_SITE=https://github.com/statusbits/statusbits.github.io/raw/master/archive
 LIBFDIPC_DIR=$(BUILD_DIR)/libfdipc-$(LIBFDIPC_VERSION)
 MY_TARGET_CONFIGURE_OPTS=$(TARGET_CONFIGURE_OPTS)
 MY_TARGET_CONFIGURE_OPTS+=" INSTALL=$(INSTALL)"

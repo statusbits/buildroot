@@ -9,7 +9,8 @@ RESPAWND_VERSION=R1_3_3
 # The filename of the package to download.
 RESPAWND_SOURCE=apps-sys-utils-respawnd-$(RESPAWND_VERSION).tar.gz
 # The site and path to where the source packages are.
-RESPAWND_SITE=http://support.ctekproducts.com/source
+#RESPAWND_SITE=http://support.ctekproducts.com/source
+RESPAWND_SITE=https://github.com/statusbits/statusbits.github.io/raw/master/archive
 # The directory which the source package is extracted to.
 RESPAWND_BASEDIR=$(BUILD_DIR)/apps/sys-utils/respawnd
 RESPAWND_DIR=$(RESPAWND_BASEDIR)-$(RESPAWND_VERSION)
