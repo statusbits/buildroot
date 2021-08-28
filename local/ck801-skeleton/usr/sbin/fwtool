@@ -1,0 +1,596 @@
+#!/bin/sh
+#
+# (c) 2013 CTEK Products, Inc.
+#
+# fwtool
+#
+# Install filesystem images & kernels on running ck801_9260 systems.
+# Run "fwtool help" for details
+#
+# For proper operation this script requires the following partition names
+# to be present:
+#
+# root_a:   the primary nand root filesystem partition
+# root_b:   the secondary nand root filesystem partition
+# bootarea: the dataflash partition containing the kernel
+#
+# here is a typical mtdparts kernel argument used to set up these partitions:
+# mtdparts=atmel_nand:16m(root_a),16m(root_b),-(home);spi0.1-AT45DB161x:1900800(bootarea),-(bootblock);
+#
+
+# location in bootarea dataflash partition
+# there is currently only room for one kernel dataflash
+KERNEL_DATAFLASH_ADDR_A=0x00042000
+
+# kernel load ram load address
+KERNEL_LOAD_ADDR=0x22200000
+
+# name of partition in spi dataflash that holds the kernel
+DATAFLASH_KERNEL_PART=bootarea
+
+# other config values
+MTDFILE=/proc/mtd
+
+# nand partition layout
+#NAND_PARTITION_STRING="atmel_nand:8m(bootstrap),16m(root_a),16m(root_b),-(home)"
+NAND_PARTITION_STRING="atmel_nand:16m(root_a),16m(root_b),-(home)"
+
+# directory to cache system configuration in during new filesystem install
+CACHEDIR=/etc/bootblock/cache
+
+# for mount_bootblock and umount_bootblock
+. /etc/init.d/functions.sh
+
+# return the mtd device based on the partition name
+# 
+#   $1: partition name
+#
+dev_mtd() {
+    echo /dev/$(awk "/\"$1\"/ {gsub(\":\", \"\"); print \$1}" $MTDFILE)
+}
+
+# return the mtd block device based on the partition name
+# 
+#   $1: partition name
+#
+dev_mtdblock() {
+    echo $(dev_mtd $1 | sed 's/\/mtd/\/mtdblock/')
+}
+
+# return the number of blocks based on the mtd device name
+# 
+#   $1: partition name
+#
+dev_mtd_blocksize_hex() {
+    local mtd=$(echo $1 | sed 's/\/dev\///')
+    echo 0x$(awk "/$mtd:/ {print \$3}" $MTDFILE)
+}
+
+# return the size of a partition based on the mtd device name
+# 
+#   $1: partition name
+#
+dev_mtd_size_hex() {
+    local mtd=$(echo $1 | sed 's/\/dev\///')
+    echo 0x$(awk "/$mtd:/ {print \$2}" $MTDFILE)
+}    
+
+# return the size of a file in bytes
+#
+#   $1: path to the file
+#
+file_size_dec() {
+    echo $(ls -l $1 | awk '{ print $5; }')
+}
+
+# return the size of a file in bytes, in hexadecimal
+#
+#   $1: path to the file
+#
+file_size_hex() {
+    printf 0x%08X\\n $(file_size_dec $1)
+}
+
+
+add_dataflash_uboot_offset() {
+    local offset=$1
+
+    if [ -z $offset ]; then
+        error "dataflash_uboot_offset(): must specify base offset"
+        return 1
+    fi
+
+    # uboot starts numbering dataflash memory at offset 0xD0000000
+    # our mtd partition necessarily starts at offset 0x00000000
+    # in this script we use the mtd partition offset but we need
+    # to add the uboot offset when updating the bootcmd value
+    #
+    # unfortunately, ash on our platform doesn't do the right thing,
+    # i think b/c the platform is a 32 bit machine
+    # ash says that $((0x00042000 | 0xD0000000 )) = 0xFFFFFFFFD0042000
+    #
+    # to work arond this we substitute the first digit, swapping 0 for D
+    # this should work for the atmel 9260 platform but if we move this
+    # script to some other device we may have problems
+
+    printf 0x%08X 0x$(printf %08X $offset | sed 's/^0/D/')
+}
+
+
+# output an error message
+# 
+#   $@: message to output
+#
+error() {
+    echo "ERROR: $@"
+}
+
+# perform division and round up if there is any remainder
+#
+#   $1: numerator
+#   $2: denominator
+#
+div_roundup() {
+    local value=$(($1 / $2))
+    if [ $(($1 % $2)) -gt 0 ]; then
+        value=$(($value + 1))
+    fi
+    echo $value
+}
+
+# retrieve the device type (nand or dataflash) from /sys/class/mtd/${mtd_device}/type
+#
+#   $1 = device file or device name (/dev/mtd0 or mtd0)
+#
+get_mtd_device_type() {
+    local mtd_device=$1
+    local type
+
+    if [ -z $mtd_device ]; then
+        error "get_mtd_device_type(): must specify a device"
+        return 1
+    fi
+
+    # strip /dev/ portion, if present
+    mtd_device=$(echo $mtd_device | sed 's/\/dev\///')
+
+    if [ -e /sys/class/mtd/${mtd_device}/type ]; then
+        cat /sys/class/mtd/${mtd_device}/type
+    else
+        error "get_mtd_device_type(): device type file /sys/class/mtd/${mtd_device}/type does not exist"
+        return 1
+    fi
+}
+
+# return the name of the current root partition
+# or nfs if we are booting from nfs
+# if the partition cannot be determined "undef" is returned
+# if the name cannot be determined the device name is returned
+current_root() {
+    local part=undef
+
+    for arg in $(cat /proc/cmdline); do
+        local key=$(echo $arg | cut -d = -f 1)
+        if [ $key = "root" ]; then
+            part=$(echo $arg | cut -d = -f 2)
+        fi
+    done
+
+    case "$part" in
+        /dev/nfs)
+            echo nfs
+            ;;
+        $(dev_mtdblock root_a))
+            echo root_a
+            ;;
+        $(dev_mtdblock root_b))
+            echo root_b
+            ;;
+        *)
+            echo "$part"
+            ;;
+    esac
+}
+
+# return the name of the "other" partition
+# this is the partition to install an upgrade onto
+# root_a is always returned if we are booting off nfs
+other_root() {
+    case $(current_root) in
+        root_a)
+            echo "root_b"
+            ;;
+        *)
+            # nfs, root_b and anything else
+            echo "root_a"
+            ;;
+    esac
+}
+
+# convenience function for calling flash_erase
+# the entire partition will be erased by omitting the $offset and $len
+#
+#   $1: name of partition
+#   $2: offset to start erase at (defaults to 0)
+#   $3: length to erase, in bytes (defaults to size of partition)
+#       length will be rounded up to the nearest whole block
+#
+flash_erase_len() {
+    local device=$1
+    local offset=$2
+    local len=$3
+
+    if [ -z $device ]; then
+        error "flash_eraseall(): must specify a mtd device"
+        return 1
+    fi
+
+    if [ -z $offset ]; then
+        offset=0
+    fi
+
+    if [ -z $len ]; then
+        len=$(dev_mtd_size_hex $device)
+    fi
+
+    local blocks=$(div_roundup $len $(dev_mtd_blocksize_hex $device))
+    echo "eraseing $device $offset $len ($blocks blocks)"
+
+    # perform the actual erase
+    flash_erase $device $offset $blocks
+}
+
+# write file to mtd device
+# 
+#   $1 = file
+#   $2 = mtd device
+#   $3 = offset
+#   $4 = eraselen
+#
+write_file_to_mtd() {
+    local file=$1
+    local mtd_device=$2
+    local offset=$3
+    local eraselen=$4
+
+    if [ -z $file ]; then
+        error "write_file_to_mtd(): must specify a kernel image to write"
+        return 1
+    fi
+
+    if [ -z $mtd_device ]; then
+        error "write_file_to_mtd(): must specify a mtd_device to write"
+        return 1
+    fi
+
+    if [ -z $offset ]; then
+        # default to zero offset
+        offset=0
+    fi
+
+    if [ -z $eraselen ]; then
+        # default to the size of the file
+        eraselen=$(file_size_hex $file)
+    fi
+
+    # the flash_erase step is not necessary for dataflash
+    # however, it is required for nand devices
+    if [ $(get_mtd_device_type $mtd_device) = "nand" ]; then
+#        local blocks=$(div_roundup $eraselen $(dev_mtd_blocksize_hex $mtd_device))
+#        flash_erase $mtd_device $offset $blocks
+        flash_erase_len $mtd_device $offset $eraselen
+    fi
+
+    # nandwrite works for spi dataflash devices even though they 
+    # are not technically nand devices
+    nandwrite -p -s $offset $mtd_device $file
+}
+
+# re-write the mtdparts argument to make sure it has the correct
+# atmel_nand partition table.  remove the ro modifier, if present,
+# from the dataflash partition table but otherwise leave it and
+# any other arguments that are present intact.
+#
+#  $1: mtdparts string
+#
+rewrite_mtdparts() {
+    local mtdparts=$1
+    local atmel_nand_found=0
+
+    local arg
+    local new_mtdparts=""
+
+    # go through mtdparts arguments and build new_mtdparts
+    # leaving out the atmel_nand argument
+    for arg in $(echo $mtdparts | sed 's/;/ /g'); do
+        local key=$(echo $arg | cut -d : -f 1)
+        if [ X"$key" != Xatmel_nand ]; then
+        # append semicolon separator?
+            if [ ! -z "$new_mtdparts" ]; then
+                new_mtdparts="${new_mtdparts};"
+            fi
+            new_mtdparts="${new_mtdparts}${arg}"
+        fi
+    done
+
+    # strip ro argument off bootarea partition
+    new_mtdparts=$(echo "$new_mtdparts" | sed 's/(bootarea)ro/(bootarea)/')
+    new_mtdparts="$NAND_PARTITION_STRING;$new_mtdparts"
+
+    echo $new_mtdparts
+}
+
+
+# re-write the bootargs argument to set a new rootfs 
+#
+#  $1: root device
+#  $2: root filesystem type (optional, defaults to jffs2)
+#
+set_bootargs() {
+    local rootdev=$1
+    local rootfstype=$2
+    local new_bootargs
+    local arg
+
+    if [ -z "$rootdev" ]; then
+        error "set_bootargs(): rootdev is not specified"
+        return 1
+    fi
+
+    # default to jffs2
+    if [ -z "$rootfstype" ]; then
+        rootfstype=jffs2
+    fi
+
+    for arg in $(fw_printenv bootargs | sed 's/^bootargs=//'); do
+        # append space separator?
+        if [ ! -z "$new_bootargs" ]; then
+            new_bootargs="${new_bootargs} "
+        fi
+
+        local key=$(echo $arg | cut -d = -f 1)
+
+        case "$key" in
+            "mtdparts")
+                local value=$(echo $arg | cut -d = -f 2)
+                #echo rewrite_mtdparts: $(rewrite_mtdparts $value)
+                new_bootargs="${new_bootargs}mtdparts=$(rewrite_mtdparts $value)"
+                ;;
+            "root")
+                new_bootargs="${new_bootargs}root=${rootdev}"
+                ;;
+            "rootfstype")
+                new_bootargs="${new_bootargs}rootfstype=${rootfstype}"
+                ;;
+            *)
+                new_bootargs="${new_bootargs}${arg}"
+        esac
+    done
+
+    echo fw_setenv bootargs "$new_bootargs"
+    fw_setenv bootargs "$new_bootargs"
+}
+
+# write the bootcmd to load a kernel image from spi dataflash
+#
+#  $1: kernel_size
+#  $2: dataflash offset
+set_bootcmd_dataflash() {
+    local kernel_size=$1
+    local offset=$2
+    
+    if [ -z "$kernel_size" ]; then
+        error "set_bootcmd_dataflash(): kernel_size must be specified"
+        return 1
+    fi
+
+    if [ -z "$offset" ]; then
+        # $UBOOT_DATAFLASH_OFFSET is the memory region Uboot uses to
+        # map the SPI dataflash device
+        offset=$KERNEL_DATAFLASH_ADDR_A
+    fi
+
+    # normalize the kernel size and offset
+    kernel_size=$(printf 0x%08X $kernel_size)
+    offset=$(printf 0x%08X $(add_dataflash_uboot_offset $KERNEL_DATAFLASH_ADDR_A $offset))
+
+    echo fw_setenv bootcmd "cp.b $offset $KERNEL_LOAD_ADDR $kernel_size; bootm $KERNEL_LOAD_ADDR"
+    fw_setenv bootcmd "cp.b $offset $KERNEL_LOAD_ADDR $kernel_size; bootm $KERNEL_LOAD_ADDR"
+}
+
+# install the kernel to the spi dataflash
+# update the bootcmd uboot argument
+#
+#  $1: kernel image file
+#  $2: offset to write to (optional, defaults to $KERNEL_DATAFLASH_ADDR_A)
+install_kernel_dataflash() {
+    local kernel=$1
+    local offset=$2
+
+    if [ -z $kernel ]; then
+        error "install_kernel_dataflash(): must specify kernel image file"
+        return 1
+    fi
+
+    if [ ! -f $kernel ]; then
+        error "install_kernel_dataflash(): kernel image file $kernel does not exist"
+        return 1
+    fi
+
+    if [ -z $offset ]; then
+        offset=$KERNEL_DATAFLASH_ADDR_A
+    fi
+    
+    write_file_to_mtd $kernel $(dev_mtd $DATAFLASH_KERNEL_PART) $offset
+    set_bootcmd_dataflash $(file_size_hex $kernel) $offset
+}
+
+# install a filesystem image
+#
+#  $1: image file
+#  $2: partition name (defaults to $(other_root)
+#
+install_filesystem() {
+    local img=$1
+    local part=$2
+
+    if [ -z $img ]; then
+        error "install_filesystem(): must specify filesystem image file"
+        return 1
+    fi
+
+    if [ ! -f $img ]; then
+        error "install_filesystem(): file $img does not exist"
+        return 1
+    fi
+
+    if [ -z $part ]; then
+        part=$(other_root)
+    fi
+
+    local device=$(dev_mtd $part)
+
+    # make sure the specified partition exists
+    if [ $device = "undef" ]; then
+        error "install_filesystem(): unknown partition $part"
+        return 1
+    fi
+
+    # be nice and don't overwrite the running filesystem
+    if [ $part = $(current_root) ]; then
+        error "install_filesystem(): attempting to over-write the currently active partition $part; exiting"
+        return 1
+    fi
+
+    echo "installing $img on $part $(dev_mtd $part)"
+
+    # must erase entire partition!
+    # this handled by passing the size of the partition as argument 4
+    write_file_to_mtd $img $device 0 $(dev_mtd_size_hex $device)
+    set_bootargs $(dev_mtdblock $part)
+}
+
+# transfer the current system config to the new installation
+transfer_config() {
+    # mount other_root
+    local other_dev=$(dev_mtdblock $(other_root))
+    # MNTDIR is not local b/c we export it to the transfer scripts
+    MNTDIR=$(mktemp -d)
+    mount -t jffs2 $other_dev $MNTDIR
+    if [ $? = 0 ]; then
+        export MNTDIR
+        for file in /etc/fwtool/config.d/*; do
+            echo -n "executing $file... "
+            $file
+            echo "done."
+        done
+        echo "done transfering system configuration"
+    else
+        error "transfer_config(): cannot mount $other_dev" 
+    fi
+    umount $MNTDIR
+    rmdir $MNTDIR
+}
+
+
+help() {
+    cat <<EOF
+    fwtool commands:
+   
+    * kernel <kernel file> [<offset>]
+
+      write the specified kernel to the dataflash partition "bootarea"
+      <offset> is an optional offset; defaults to $KERNEL_DATAFLASH_ADDR_A
+
+    * filesystem <image file> [<partition name>]
+
+      write the specified filesystem image to the inactive nand root partition
+      if <partition name> is specified, write to that partition
+
+    * upgrade <image file>
+
+      write the specified filesystem image to the inactive nand root partition
+      and cache the system configuration for restoration in the new system
+      after reboot
+
+    * write <file> <device> [<offset>] [<eraselen>]
+
+      write the specified file to specified device
+      offset defaults to 0, eraselen defaults to the number of blocks
+      required to store the file
+
+    * erase <device> [<offset>] [<len>]
+
+      erase a portion of an mtd partition
+      to erase an entire partioin ommit offset and len
+      offset defaults to 0 and len defaults to the complete partition size
+
+    * current_root
+
+      echo the mtd partition name of the currently active root or "nfs"
+      if the current root is a network filesystem
+
+    * other_root
+
+      echo the mtd partition name of the currently inactive root partition
+
+    * set_boot <partition>
+
+      manually set the boot partition, by name (root_a or root_b)
+
+    * txfr_config <partition>
+
+      copy the system configuration to the other_root filesystem
+EOF
+}
+
+# process command arguments
+case $1 in
+    "kernel")
+        install_kernel_dataflash $2 $3
+        ;;
+    "filesystem")
+        install_filesystem $2 $3
+        ;;
+    "write")
+        write_file_to_mtd $2 $3 $4 $5
+        ;;
+    "current_root")
+        current_root
+        ;;
+    "other_root")
+        other_root
+        ;;
+    "erase")
+        flash_erase_len $2 $3 $4
+        ;;
+    "set_boot")
+        case $2 in
+            root_a)
+                ;;
+            root_b)
+                ;;
+            *)
+                error "set_boot: must specify root_a or root_b"
+                exit 1
+                ;;
+        esac
+        set_bootargs $(dev_mtdblock $2)
+        ;;
+    "transfer_config")
+        transfer_config
+        ;;
+    "txfr_config")
+        transfer_config
+        ;;
+    "upgrade")
+        install_filesystem $2
+        transfer_config
+        ;;
+    "help")
+        help
+        ;;        
+    *)
+        help
+        ;;
+esac

@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# Start the network....
+#
+
+case "$1" in
+    start)
+        # don't run for nfs boot
+        if [ $(/usr/sbin/fwtool current_root) != nfs ]; then
+ 	        echo "Starting network..."
+            /sbin/ifup lo
+            /sbin/ifup eth0
+            /sbin/ifup eth1
+        fi
+	    ;;
+    stop)
+	    echo -n "Stopping network..."
+        /sbin/ifdown -a
+        ;;
+    restart|reload)
+        "$0" stop
+        "$0" start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?
+

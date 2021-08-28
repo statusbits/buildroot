@@ -1,0 +1,6 @@
+config BR2_CTEK_SAMPLES
+	bool "cteksamples"
+	help
+	  Sample test code for gpio, voltage, etc.
+
+	  http://www.ctekproducts.com

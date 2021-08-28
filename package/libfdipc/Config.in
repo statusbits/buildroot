@@ -1,0 +1,4 @@
+config BR2_PACKAGE_LIBFDIPC
+	bool "libfdipc"
+	help
+	  Library implements transfer of open file descriptors by AF_UNIX datagram sockets.

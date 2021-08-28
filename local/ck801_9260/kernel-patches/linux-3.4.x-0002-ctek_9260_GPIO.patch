@@ -1,0 +1,178 @@
+diff -uNr linux-3.4.19.orig/drivers/char/gpio_dev.c linux-3.4.19/drivers/char/gpio_dev.c
+--- linux-3.4.19.orig/drivers/char/gpio_dev.c	1969-12-31 16:00:00.000000000 -0800
++++ linux-3.4.19/drivers/char/gpio_dev.c	2013-03-05 10:02:24.335352681 -0800
+@@ -0,0 +1,137 @@
++/*
++ * character device wrapper for generic gpio layer
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA02111-1307USA
++ *
++ * Feedback, Bugs...  blogic@openwrt.org
++ *
++ */
++
++#include <linux/module.h>
++#include <linux/errno.h>
++#include <linux/init.h>
++#include <asm/uaccess.h>
++#include <asm/io.h>
++#include <asm/gpio.h>
++#include <asm/atomic.h>
++#include <linux/init.h>
++#include <linux/genhd.h>
++#include <linux/miscdevice.h>
++#include <linux/gpio_dev.h>
++
++#define DRVNAME      "gpiodev"
++#define DEVNAME      "gpio"
++
++static int dev_major;
++
++/* Counter is 1, if the device is not opened and zero (or less) if opened. */
++static atomic_t gpio_open_cnt = ATOMIC_INIT(1);
++
++static long
++gpio_ioctl(struct file * file, unsigned int cmd, unsigned long arg)
++{
++   int retval = 0;
++
++   switch (cmd)
++   {
++   case GPIO_GET:
++      retval = gpio_get_value(arg);
++      break;
++
++   case GPIO_SET:
++      gpio_set_value(arg, 1);
++      break;
++
++   case GPIO_CLEAR:
++      gpio_set_value(arg, 0);
++      break;
++
++   case GPIO_DIR_IN:
++      gpio_direction_input(arg);
++      break;
++
++   case GPIO_DIR_OUT:
++      gpio_direction_output(arg, 0);
++      break;
++
++   default:
++      retval = -EINVAL;
++      break;
++   }
++
++   return retval;
++}
++
++static int
++gpio_open(struct inode *inode, struct file *file)
++{
++   int result = 0;
++//   unsigned int dev_minor = MINOR(inode->i_rdev);
++
++   /* FIXME: We should really allow multiple applications to open the device
++    *        at the same time, as long as the apps access different IO pins.
++    *        The generic gpio-registration functions can be used for that.
++    *        Two new IOCTLs have to be introduced for that. Need to check userspace
++    *        compatibility first. --mb */
++// if (!atomic_dec_and_test(&gpio_open_cnt)) {
++//    atomic_inc(&gpio_open_cnt);
++//    printk(KERN_ERR DRVNAME ": Device with minor ID %d already in use\n", dev_minor);
++//    result = -EBUSY;
++//    goto out;
++// }
++
++//out:
++   return result;
++}
++
++static int
++gpio_close(struct inode * inode, struct file * file)
++{
++//   smp_mb__before_atomic_inc();
++//   atomic_inc(&gpio_open_cnt);
++
++   return 0;
++}
++
++struct file_operations gpio_fops = {
++   .unlocked_ioctl      = gpio_ioctl,
++   .open      = gpio_open,
++   .release   = gpio_close,
++};
++
++static struct miscdevice gpio_dev = {
++        .minor         = MISC_DYNAMIC_MINOR,
++        .name         = "gpio",                   
++        .fops         = &gpio_fops,
++};
++
++static int __init
++gpio_mod_init(void)
++{
++   return misc_register(&gpio_dev);
++}
++
++static void __exit
++gpio_mod_exit(void)
++{
++   misc_deregister(&gpio_dev);
++}
++
++module_init (gpio_mod_init);
++module_exit (gpio_mod_exit);
++
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR("John Crispin / OpenWrt");
++MODULE_DESCRIPTION("Character device for for generic gpio api");
+diff -uNr linux-3.4.19.orig/drivers/char/Makefile linux-3.4.19/drivers/char/Makefile
+--- linux-3.4.19.orig/drivers/char/Makefile	2012-11-17 13:16:56.000000000 -0800
++++ linux-3.4.19/drivers/char/Makefile	2013-03-05 10:04:20.471349136 -0800
+@@ -5,6 +5,7 @@
+ obj-y				+= mem.o random.o
+ obj-$(CONFIG_TTY_PRINTK)	+= ttyprintk.o
+ obj-y				+= misc.o
++obj-y                       += gpio_dev.o
+ obj-$(CONFIG_ATARI_DSP56K)	+= dsp56k.o
+ obj-$(CONFIG_VIRTIO_CONSOLE)	+= virtio_console.o
+ obj-$(CONFIG_RAW_DRIVER)	+= raw.o
+diff -uNr linux-3.4.19.orig/include/linux/gpio_dev.h linux-3.4.19/include/linux/gpio_dev.h
+--- linux-3.4.19.orig/include/linux/gpio_dev.h	1969-12-31 16:00:00.000000000 -0800
++++ linux-3.4.19/include/linux/gpio_dev.h	2013-03-05 10:02:24.335352681 -0800
+@@ -0,0 +1,11 @@
++#ifndef _GPIODEV_H__
++#define _GPIODEV_H__
++
++#define IOC_GPIODEV_MAGIC  'B'
++#define GPIO_GET        _IO(IOC_GPIODEV_MAGIC, 10)
++#define GPIO_SET        _IO(IOC_GPIODEV_MAGIC, 11)
++#define GPIO_CLEAR      _IO(IOC_GPIODEV_MAGIC, 12)
++#define GPIO_DIR_IN     _IO(IOC_GPIODEV_MAGIC, 13)
++#define GPIO_DIR_OUT    _IO(IOC_GPIODEV_MAGIC, 14)
++
++#endif
+diff -uNr linux-3.4.19.orig/include/linux/Kbuild linux-3.4.19/include/linux/Kbuild
+--- linux-3.4.19.orig/include/linux/Kbuild	2012-11-17 13:16:56.000000000 -0800
++++ linux-3.4.19/include/linux/Kbuild	2013-03-05 10:05:23.751347196 -0800
+@@ -144,6 +144,7 @@
+ header-y += genetlink.h
+ header-y += gfs2_ondisk.h
+ header-y += gigaset_dev.h
++header-y += gpio_dev.h
+ header-y += hdlc.h
+ header-y += hdlcdrv.h
+ header-y += hdreg.h

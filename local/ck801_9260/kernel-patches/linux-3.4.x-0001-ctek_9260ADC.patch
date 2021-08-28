@@ -1,0 +1,413 @@
+diff -uNr linux-3.4.19.orig/arch/arm/mach-at91/at91_adc.c linux-3.4.19/arch/arm/mach-at91/at91_adc.c
+--- linux-3.4.19.orig/arch/arm/mach-at91/at91_adc.c	1969-12-31 16:00:00.000000000 -0800
++++ linux-3.4.19/arch/arm/mach-at91/at91_adc.c	2013-03-05 09:54:50.419366544 -0800
+@@ -0,0 +1,230 @@
++/* 
++ *  Driver for ADC on the FoxBoardG20
++ *
++ *  Copyright (R) 2010 - Claudio Mignanti
++ *  Based on http://www.at91.com/forum/viewtopic.php/p,9409/#p9409
++ *
++ *  Copyright (C) 2010 Stefano Barbato - stefano@codesink.org
++ *
++ *  2010/05/18 Antonio Galea
++ *    Sysfs device model, different drivers integration
++ *
++ *  WISHLIST:
++ *  - concurrent access control
++ *  - add support for dynamic reconfiguration
++ *  - hardware triggers
++ *
++ *  This program is free software; you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as  published by 
++ *  the Free Software Foundation.
++ *
++ * $Id$
++ * ---------------------------------------------------------------------------
++*/
++
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/clk.h>
++#include <linux/platform_device.h>
++#include <mach/gpio.h>
++#include <asm/io.h>
++#include <linux/fs.h>
++#include <linux/cdev.h>
++
++#include "at91_adc.h"
++
++
++static void at91_adc_device_release(struct device *dev){}
++struct platform_device at91_adc_device = {
++  .name          = "at91_adc",
++  .id            = -1,
++  .dev.release   = at91_adc_device_release,
++};
++struct clk          *at91_adc_clk;
++void __iomem        *at91_adc_base;
++static struct cdev  *at91_adc_cdev  = NULL;
++static dev_t         at91_adc_devno = 0;
++static struct class *at91_adc_class = NULL;
++#define DRV_CLASS   "at91_adc"
++#define ADC_READ    1
++
++
++//////////////////////////////////////////////////////
++// Device functions
++//////////////////////////////////////////////////////
++#define at91_adc_read(reg)        ioread32(at91_adc_base + (reg))
++#define at91_adc_write(reg, val)  iowrite32((val), at91_adc_base + (reg))
++#define AT91_DEFAULT_CONFIG       AT91_ADC_SHTIM   | \
++                                  AT91_ADC_STARTUP | \
++                                  AT91_ADC_PRESCAL | \
++                                  AT91_ADC_SLEEP
++
++static int at91_adc_read_chan(int chan){
++  int val, sr;
++  if(chan<0 || chan>3){ return -EINVAL; }
++  at91_adc_write(AT91_ADC_CHER,AT91_ADC_CH(chan));      //Enable Channel
++  at91_adc_write(AT91_ADC_CR,AT91_ADC_START);           //Start the ADC
++  for(sr=0; !(sr & AT91_ADC_EOC(chan)); sr=at91_adc_read(AT91_ADC_SR))
++    cpu_relax();
++  val=at91_adc_read(AT91_ADC_CDR(chan)) & AT91_ADC_DATA; //Read up to 10 bits
++  return val;
++}
++
++static int at91_adc_config(int requested_config){
++  int actual_config;
++  at91_adc_write(AT91_ADC_CR,AT91_ADC_SWRST);   //Reset the ADC
++  at91_adc_write(AT91_ADC_MR,requested_config); //Mode setup
++  actual_config = at91_adc_read(AT91_ADC_MR);   //Read it back
++  return (requested_config==actual_config? 0: -EINVAL);
++}
++
++//////////////////////////////////////////////////////
++// Sysfs interface
++//////////////////////////////////////////////////////
++static ssize_t at91_adc_chanX_show(
++  struct device *dev, struct device_attribute *attr, char *buf
++){
++  ssize_t status = 0;
++  int     chan = -1;
++  int     value;
++  if(strlen(attr->attr.name)==5 && strncmp(attr->attr.name,"chan",4)==0){
++    chan = attr->attr.name[4]-'0';
++  }
++  if(chan<0 || chan>3){ return -EIO; }
++  value  = at91_adc_read_chan(chan);
++  status = sprintf(buf, "%d\n", value);
++  return status;
++}
++
++static DEVICE_ATTR(chan0, 0444, at91_adc_chanX_show, NULL);
++static DEVICE_ATTR(chan1, 0444, at91_adc_chanX_show, NULL);
++static DEVICE_ATTR(chan2, 0444, at91_adc_chanX_show, NULL);
++static DEVICE_ATTR(chan3, 0444, at91_adc_chanX_show, NULL);
++static const struct attribute *at91_adc_dev_attrs[] = {
++  &dev_attr_chan0.attr,
++  &dev_attr_chan1.attr,
++  &dev_attr_chan2.attr,
++  &dev_attr_chan3.attr,
++  NULL,
++};
++static const struct attribute_group at91_adc_dev_attr_group = {
++  .attrs = (struct attribute **) at91_adc_dev_attrs,
++};
++
++//////////////////////////////////////////////////////
++// IOCTL interface
++//////////////////////////////////////////////////////
++static int at91_adc_ioctl(
++  struct file *file, unsigned int cmd, unsigned long arg
++){
++  int retval = 0;
++  switch (cmd) {
++    case ADC_READ:
++      return at91_adc_read_chan((int)arg);
++      break;
++    default:
++      retval = -EINVAL;
++  }
++  return retval;
++}
++struct file_operations at91_adc_fops = {
++  .owner = THIS_MODULE,
++  .unlocked_ioctl = at91_adc_ioctl,
++};
++
++static void at91_adc_cdev_teardown(void){
++  if(at91_adc_class){
++    device_destroy(at91_adc_class, at91_adc_devno);
++    class_destroy(at91_adc_class);
++  }
++  if(at91_adc_devno){
++    unregister_chrdev_region(at91_adc_devno,1);
++    if(at91_adc_cdev){ cdev_del(at91_adc_cdev); }
++  }
++  at91_adc_devno = 0;
++  at91_adc_cdev  = NULL;
++  at91_adc_class = NULL;
++  return;
++}
++
++static int at91_adc_cdev_setup(void){
++  int status;
++  /* alloc a new device number (major: dynamic, minor: 0) */
++  status = alloc_chrdev_region(&at91_adc_devno,0,1,at91_adc_device.name);
++  if(status){ goto err; }
++  /* create a new char device */
++  at91_adc_cdev = cdev_alloc();
++  if(at91_adc_cdev == NULL){ status=-ENOMEM; goto err; }
++  at91_adc_cdev->owner = THIS_MODULE;
++  at91_adc_cdev->ops   = &at91_adc_fops;
++  status = cdev_add(at91_adc_cdev,at91_adc_devno,1);
++  if(status){ goto err; }
++  /* register the class */
++  at91_adc_class = class_create(THIS_MODULE, DRV_CLASS);
++  if(IS_ERR(at91_adc_class)){ status=-EFAULT; goto err; }
++  device_create(at91_adc_class, NULL, at91_adc_devno, NULL, at91_adc_device.name);
++  printk("Major: %u; minor: %u\n", \
++    MAJOR(at91_adc_devno), MINOR(at91_adc_devno) \
++  );
++  return 0;
++
++err:
++  at91_adc_cdev_teardown();
++  return status;
++}
++
++//////////////////////////////////////////////////////
++// Module init/exit
++//////////////////////////////////////////////////////
++static int __init at91_adc_init(void){
++  int status;
++  at91_adc_clk = clk_get(NULL,"adc_clk");
++  clk_enable(at91_adc_clk);
++  at91_adc_base = ioremap(AT91SAM9260_BASE_ADC,SZ_256);
++  if(!at91_adc_base){ status=-ENODEV; goto fail_no_iomem; }
++  status = platform_device_register(&at91_adc_device);
++  if(status){ goto fail_no_dev; }
++  status = at91_adc_config(AT91_DEFAULT_CONFIG);
++  if(status){ goto fail_no_config; }
++  status = sysfs_create_group(
++    &(at91_adc_device.dev.kobj), &at91_adc_dev_attr_group
++  );
++  if(status){ goto fail_no_sysfs; }
++  status = at91_adc_cdev_setup();
++  if(status){ goto fail_no_cdev; }
++  printk("Registered device at91_adc.\n");
++  return 0;
++
++fail_no_cdev:
++  // nothing to undo
++fail_no_sysfs:
++  // nothing to undo
++fail_no_config:
++  platform_device_unregister(&at91_adc_device);
++fail_no_dev:
++  iounmap(at91_adc_base);
++fail_no_iomem:
++  clk_disable(at91_adc_clk);
++  clk_put(at91_adc_clk);
++  return status;
++}
++
++static void __exit at91_adc_exit(void){
++  at91_adc_cdev_teardown();
++  platform_device_unregister(&at91_adc_device);
++  iounmap(at91_adc_base);
++  clk_disable(at91_adc_clk);
++  clk_put(at91_adc_clk);
++  printk("Unregistered device at91_adc.\n");
++}
++
++module_init(at91_adc_init);
++module_exit(at91_adc_exit);
++
++MODULE_AUTHOR("Paul Kavan");
++MODULE_AUTHOR("Claudio Mignanti");
++MODULE_AUTHOR("Antonio Galea");
++MODULE_AUTHOR("Stefano Barbato");
++MODULE_DESCRIPTION("ADC Driver for the FoxBoardG20");
++MODULE_LICENSE("GPL");
+diff -uNr linux-3.4.19.orig/arch/arm/mach-at91/at91_adc.h linux-3.4.19/arch/arm/mach-at91/at91_adc.h
+--- linux-3.4.19.orig/arch/arm/mach-at91/at91_adc.h	1969-12-31 16:00:00.000000000 -0800
++++ linux-3.4.19/arch/arm/mach-at91/at91_adc.h	2013-03-05 09:54:26.887367262 -0800
+@@ -0,0 +1,62 @@
++/*
++ * include/asm-arm/arch-at91/at91_adc.h
++ *
++ * Copyright (C) SAN People
++ *
++ * Analog-to-Digital Converter (ADC) registers.
++ * Based on AT91SAM9260 datasheet revision D.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ */
++
++#ifndef AT91_ADC_H
++#define AT91_ADC_H
++
++#define AT91_ADC_CR		0x00		/* Control Register */
++#define		AT91_ADC_SWRST		(1 << 0)	/* Software Reset */
++#define		AT91_ADC_START		(1 << 1)	/* Start Conversion */
++
++#define AT91_ADC_MR		0x04		/* Mode Register */
++#define		AT91_ADC_TRGEN		(1 << 0)	/* Trigger Enable */
++#define		AT91_ADC_TRGSEL		(7 << 1)	/* Trigger Selection */
++#define			AT91_ADC_TRGSEL_TC0		(0 << 1)
++#define			AT91_ADC_TRGSEL_TC1		(1 << 1)
++#define			AT91_ADC_TRGSEL_TC2		(2 << 1)
++#define			AT91_ADC_TRGSEL_EXTERNAL	(6 << 1)
++#define		AT91_ADC_LOWRES		(1 << 4)	/* Low Resolution */
++#define		AT91_ADC_SLEEP		(1 << 5)	/* Sleep Mode */
++#define		AT91_ADC_PRESCAL	(0x3f << 8)	/* Prescalar Rate Selection */
++#define			AT91_ADC_PRESCAL_(x)	((x) << 8)
++#define		AT91_ADC_STARTUP	(0x1f << 16)	/* Startup Up Time */
++#define			AT91_ADC_STARTUP_(x)	((x) << 16)
++#define		AT91_ADC_SHTIM		(0xf  << 24)	/* Sample & Hold Time */
++#define			AT91_ADC_SHTIM_(x)	((x) << 24)
++
++#define AT91_ADC_CHER		0x10		/* Channel Enable Register */
++#define AT91_ADC_CHDR		0x14		/* Channel Disable Register */
++#define AT91_ADC_CHSR		0x18		/* Channel Status Register */
++#define		AT91_ADC_CH(n)		(1 << (n))	/* Channel Number */
++
++#define AT91_ADC_SR		0x1C		/* Status Register */
++#define		AT91_ADC_EOC(n)		(1 << (n))	/* End of Conversion on Channel N */
++#define		AT91_ADC_OVRE(n)	(1 << ((n) + 8))/* Overrun Error on Channel N */
++#define		AT91_ADC_DRDY		(1 << 16)	/* Data Ready */
++#define		AT91_ADC_GOVRE		(1 << 17)	/* General Overrun Error */
++#define		AT91_ADC_ENDRX		(1 << 18)	/* End of RX Buffer */
++#define		AT91_ADC_RXFUFF		(1 << 19)	/* RX Buffer Full */
++
++#define AT91_ADC_LCDR		0x20		/* Last Converted Data Register */
++#define		AT91_ADC_LDATA		(0x3ff)
++
++#define AT91_ADC_IER		0x24		/* Interrupt Enable Register */
++#define AT91_ADC_IDR		0x28		/* Interrupt Disable Register */
++#define AT91_ADC_IMR		0x2C		/* Interrupt Mask Register */
++
++#define AT91_ADC_CDR(n)		(0x30 + ((n) * 4))	/* Channel Data Register N */
++#define		AT91_ADC_DATA		(0x3ff)
++
++#endif
++
+diff -uNr linux-3.4.19.orig/arch/arm/mach-at91/Makefile linux-3.4.19/arch/arm/mach-at91/Makefile
+--- linux-3.4.19.orig/arch/arm/mach-at91/Makefile	2012-11-17 13:16:56.000000000 -0800
++++ linux-3.4.19/arch/arm/mach-at91/Makefile	2013-03-05 09:54:26.887367262 -0800
+@@ -41,7 +41,7 @@
+ obj-$(CONFIG_MACH_RSI_EWS)	+= board-rsi-ews.o
+ 
+ # AT91SAM9260 board-specific support
+-obj-$(CONFIG_MACH_AT91SAM9260EK) += board-sam9260ek.o
++obj-$(CONFIG_MACH_AT91SAM9260EK) += board-sam9260ek.o at91_adc.o
+ obj-$(CONFIG_MACH_CAM60)	+= board-cam60.o
+ obj-$(CONFIG_MACH_SAM9_L9260)	+= board-sam9-l9260.o
+ obj-$(CONFIG_MACH_USB_A9260)	+= board-usb-a926x.o
+diff -uNr linux-3.4.19.orig/arch/arm/mach-at91/Makefile.orig linux-3.4.19/arch/arm/mach-at91/Makefile.orig
+--- linux-3.4.19.orig/arch/arm/mach-at91/Makefile.orig	1969-12-31 16:00:00.000000000 -0800
++++ linux-3.4.19/arch/arm/mach-at91/Makefile.orig	2012-11-17 13:16:56.000000000 -0800
+@@ -0,0 +1,97 @@
++#
++# Makefile for the linux kernel.
++#
++
++obj-y		:= irq.o gpio.o setup.o
++obj-m		:=
++obj-n		:=
++obj-		:=
++
++obj-$(CONFIG_AT91_PMC_UNIT)	+= clock.o
++obj-$(CONFIG_AT91_SAM9_ALT_RESET) += at91sam9_alt_reset.o
++obj-$(CONFIG_AT91_SAM9G45_RESET) += at91sam9g45_reset.o
++
++# CPU-specific support
++obj-$(CONFIG_ARCH_AT91RM9200)	+= at91rm9200.o at91rm9200_time.o at91rm9200_devices.o
++obj-$(CONFIG_ARCH_AT91SAM9260)	+= at91sam9260.o at91sam926x_time.o at91sam9260_devices.o sam9_smc.o
++obj-$(CONFIG_ARCH_AT91SAM9261)	+= at91sam9261.o at91sam926x_time.o at91sam9261_devices.o sam9_smc.o
++obj-$(CONFIG_ARCH_AT91SAM9G10)	+= at91sam9261.o at91sam926x_time.o at91sam9261_devices.o sam9_smc.o
++obj-$(CONFIG_ARCH_AT91SAM9263)	+= at91sam9263.o at91sam926x_time.o at91sam9263_devices.o sam9_smc.o
++obj-$(CONFIG_ARCH_AT91SAM9RL)	+= at91sam9rl.o at91sam926x_time.o at91sam9rl_devices.o sam9_smc.o
++obj-$(CONFIG_ARCH_AT91SAM9G20)	+= at91sam9260.o at91sam926x_time.o at91sam9260_devices.o sam9_smc.o
++obj-$(CONFIG_ARCH_AT91SAM9G45)	+= at91sam9g45.o at91sam926x_time.o at91sam9g45_devices.o sam9_smc.o
++obj-$(CONFIG_ARCH_AT91SAM9X5)	+= at91sam9x5.o at91sam926x_time.o sam9_smc.o
++obj-$(CONFIG_ARCH_AT91X40)	+= at91x40.o at91x40_time.o
++
++# AT91RM9200 board-specific support
++obj-$(CONFIG_MACH_ONEARM)	+= board-1arm.o
++obj-$(CONFIG_ARCH_AT91RM9200DK)	+= board-rm9200dk.o
++obj-$(CONFIG_MACH_AT91RM9200EK)	+= board-rm9200ek.o
++obj-$(CONFIG_MACH_CSB337)	+= board-csb337.o
++obj-$(CONFIG_MACH_CSB637)	+= board-csb637.o
++obj-$(CONFIG_MACH_CARMEVA)	+= board-carmeva.o
++obj-$(CONFIG_MACH_KB9200)	+= board-kb9202.o
++obj-$(CONFIG_MACH_ATEB9200)	+= board-eb9200.o
++obj-$(CONFIG_MACH_KAFA)		+= board-kafa.o
++obj-$(CONFIG_MACH_PICOTUX2XX)	+= board-picotux200.o
++obj-$(CONFIG_MACH_ECBAT91)	+= board-ecbat91.o
++obj-$(CONFIG_MACH_YL9200)	+= board-yl-9200.o
++obj-$(CONFIG_MACH_CPUAT91)	+= board-cpuat91.o
++obj-$(CONFIG_MACH_ECO920)	+= board-eco920.o
++obj-$(CONFIG_MACH_RSI_EWS)	+= board-rsi-ews.o
++
++# AT91SAM9260 board-specific support
++obj-$(CONFIG_MACH_AT91SAM9260EK) += board-sam9260ek.o
++obj-$(CONFIG_MACH_CAM60)	+= board-cam60.o
++obj-$(CONFIG_MACH_SAM9_L9260)	+= board-sam9-l9260.o
++obj-$(CONFIG_MACH_USB_A9260)	+= board-usb-a926x.o
++obj-$(CONFIG_MACH_QIL_A9260)	+= board-qil-a9260.o
++obj-$(CONFIG_MACH_AFEB9260)	+= board-afeb-9260v1.o
++obj-$(CONFIG_MACH_CPU9260)	+= board-cpu9krea.o
++obj-$(CONFIG_MACH_FLEXIBITY)	+= board-flexibity.o
++
++# AT91SAM9261 board-specific support
++obj-$(CONFIG_MACH_AT91SAM9261EK) += board-sam9261ek.o
++obj-$(CONFIG_MACH_AT91SAM9G10EK) += board-sam9261ek.o
++
++# AT91SAM9263 board-specific support
++obj-$(CONFIG_MACH_AT91SAM9263EK) += board-sam9263ek.o
++obj-$(CONFIG_MACH_USB_A9263)	+= board-usb-a926x.o
++obj-$(CONFIG_MACH_NEOCORE926)	+= board-neocore926.o
++
++# AT91SAM9RL board-specific support
++obj-$(CONFIG_MACH_AT91SAM9RLEK)	+= board-sam9rlek.o
++
++# AT91SAM9G20 board-specific support
++obj-$(CONFIG_MACH_AT91SAM9G20EK) += board-sam9g20ek.o
++obj-$(CONFIG_MACH_CPU9G20)	+= board-cpu9krea.o
++obj-$(CONFIG_MACH_ACMENETUSFOXG20) += board-foxg20.o
++obj-$(CONFIG_MACH_STAMP9G20)	+= board-stamp9g20.o
++obj-$(CONFIG_MACH_PORTUXG20)	+= board-stamp9g20.o
++obj-$(CONFIG_MACH_PCONTROL_G20)	+= board-pcontrol-g20.o board-stamp9g20.o
++obj-$(CONFIG_MACH_GSIA18S)	+= board-gsia18s.o board-stamp9g20.o
++obj-$(CONFIG_MACH_USB_A9G20)	+= board-usb-a926x.o
++
++# AT91SAM9260/AT91SAM9G20 board-specific support
++obj-$(CONFIG_MACH_SNAPPER_9260)	+= board-snapper9260.o
++
++# AT91SAM9G45 board-specific support
++obj-$(CONFIG_MACH_AT91SAM9M10G45EK) += board-sam9m10g45ek.o
++
++# AT91SAM board with device-tree
++obj-$(CONFIG_MACH_AT91SAM_DT) += board-dt.o
++
++# AT91X40 board-specific support
++obj-$(CONFIG_MACH_AT91EB01)	+= board-eb01.o
++
++# Drivers
++obj-y				+= leds.o
++
++# Power Management
++obj-$(CONFIG_PM)		+= pm.o
++obj-$(CONFIG_AT91_SLOW_CLOCK)	+= pm_slowclock.o
++obj-$(CONFIG_CPU_IDLE)	+= cpuidle.o
++
++ifeq ($(CONFIG_PM_DEBUG),y)
++CFLAGS_pm.o += -DDEBUG
++endif

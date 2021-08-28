@@ -1,0 +1,4 @@
+config BR2_PACKAGE_VFTPD
+	bool "vftpd"
+	help
+	  This is the vftp server used in the Axis Communications distribution.

@@ -1,0 +1,19 @@
+--- linux-3.4.19.orig/arch/arm/mach-at91/board-sam9260ek.c	2013-06-12 13:31:53.000000000 -0700
++++ linux-3.4.19/arch/arm/mach-at91/board-sam9260ek.c	2013-06-14 13:24:19.000000000 -0700
+@@ -106,6 +106,16 @@
+ 		.max_speed_hz	= 15 * 1000 * 1000,
+ 		.bus_num	= 0,
+ 	},
++#if defined(CONFIG_MMC_SPI) || defined(CONFIG_MMC_SPI_MODULE)
++    {
++        /* MicroSD MMC card */
++        .modalias = "mmc_spi",
++        .max_speed_hz = 20000000,
++        .bus_num = 0,
++        .chip_select = 0,
++        .mode = SPI_MODE_3,
++    },
++#endif
+ #if defined(CONFIG_MTD_AT91_DATAFLASH_CARD)
+ 	{	/* DataFlash card */
+ 		.modalias	= "mtd_dataflash",

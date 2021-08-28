@@ -1,0 +1,4 @@
+#!/bin/sh
+
+# copy the contents of /etc/conf.d/ to the new system
+cp /etc/conf.d/* $MNTDIR/etc/conf.d/

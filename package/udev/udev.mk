@@ -40,7 +40,10 @@ ifeq ($(BR2_PACKAGE_SYSTEMD),y)
 endif
 
 define UDEV_INSTALL_INITSCRIPT
+	mkdir -p -m 777 $(TARGET_DIR)/ctek
 	$(INSTALL) -m 0755 package/udev/S10udev $(TARGET_DIR)/etc/init.d/S10udev
+	$(INSTALL) -m 0644 package/udev/automount.rules $(TARGET_DIR)/etc/udev/rules.d
+
 endef
 
 UDEV_POST_INSTALL_TARGET_HOOKS += UDEV_INSTALL_INITSCRIPT

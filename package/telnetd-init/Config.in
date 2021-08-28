@@ -1,0 +1,4 @@
+config BR2_PACKAGE_TELNETD
+	bool "telnetdinit"
+	help
+	  This the startup script and configuration for busybox telnetd

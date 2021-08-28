@@ -14,6 +14,9 @@ OPENSSH_DEPENDENCIES = zlib openssl
 
 define OPENSSH_INSTALL_INITSCRIPT
 	$(INSTALL) -D -m 755 package/openssh/S50sshd $(TARGET_DIR)/etc/init.d/S50sshd
+	$(INSTALL) -D -m 600 package/openssh/keys/* $(TARGET_DIR)/etc/
+	$(INSTALL) -D -m 644 package/openssh/keys.pub/* $(TARGET_DIR)/etc/
+	$(INSTALL) -D -m 644 package/openssh/local_config/* $(TARGET_DIR)/etc/
 endef
 
 OPENSSH_POST_INSTALL_TARGET_HOOKS += OPENSSH_INSTALL_INITSCRIPT

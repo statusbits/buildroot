@@ -1,0 +1,4 @@
+config BR2_PACKAGE_RESPAWND
+	bool "respawnd"
+	help
+	  This the respawn daemon developed by Axis Communications.

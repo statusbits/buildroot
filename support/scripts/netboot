@@ -1,0 +1,126 @@
+#!/usr/bin/expect
+
+
+# set to your serial port
+set tty /dev/ttyUSB0
+set tty_speed 115200
+
+# kernel load address
+set kernel_loadaddr 0x22200000
+
+# edit these to match your network
+set serverip 192.168.101.102
+set ip_addr 192.168.101.12
+set ip_netmask 255.255.255.0
+set ip_gateway 192.168.101.1
+set rootpath /exports/ctek
+set bootfile uImage
+set kernel_ip_arg "${ip_addr}::${ip_gateway}::::"
+
+# the spi argument must match the spi chip on the system
+#set atmel_nand "atmel_nand:8m(bootstrap),16m(root_a),16m(root_b),-(home)"
+set atmel_nand "atmel_nand:16m(root_a),16m(root_b),-(home)"
+
+# send characters slowly
+set send_slow {1 .1}
+
+# convenience function that writes a command and then waits
+# for the u-boot prompt
+proc send_uboot {str} {
+    global spawn_id
+
+    send $str
+    
+    expect {
+        -re "U-Boot>"
+    }
+}
+
+# write an information message
+proc user_msg {str} {
+    puts " *  $str"
+    flush stdout
+}
+
+
+# make sure port is 9600 baud, 8N1
+system "stty -F $tty -parity cs8 $tty_speed"
+spawn -open [open $tty w+]
+
+user_msg "waiting for u-boot bootloader"
+
+# get the system to the u-boot prompt
+# if the system is already running attempt to log in
+set timeout 1
+expect {
+    {timeout} { send "\r"; exp_continue }
+    -re "Hit any key to stop" { send_uboot " " }
+    -re "login: " { send "root\r"; exp_continue }
+    -re "word: " {send "pass\r"; exp_continue }
+    -re "U-Boot>"  { send "reset\r"; exp_continue }
+    -re "\]\#" { send "reboot\r"; sleep 2; exp_continue }
+    -re "\#" { send "reboot\r"; sleep 2; exp_continue }
+}
+
+# parse existing bootargs string to reproduce the spi flash chip
+# this is a good idea b/c it lets us support different spi flash chips
+set timeout 5
+send "printenv bootargs\r"
+expect -re "bootargs=(.*)\r"
+foreach arg [split $expect_out(1,string) " "] {
+    set keyvalue [split $arg =]
+    if { [lindex $keyvalue 0] == "mtdparts" } {
+        set mtdparts [lindex $keyvalue 1]
+        # remove 'ro' marker from the bootarea, if present
+        regsub {\(bootarea\)ro} $mtdparts {(bootarea)} mtdparts
+    }
+}
+
+# remove the atmel_nand argument to replace with our version above
+set new_mtdparts $atmel_nand
+foreach arg [split $mtdparts {;}] {
+    set keyvalue [split $arg : ]
+    if { [lindex $keyvalue 0] != "atmel_nand" } {
+        lappend new_mtdparts $arg
+    }
+}
+
+# re-assemble the mtdparts argument including our default atmel_nand
+set mtdparts [join $new_mtdparts {;}]
+puts mtdparts=$mtdparts
+#exit
+
+# wait for the u-boot prompt
+expect {
+    -re "U-Boot>"
+}
+
+# set bootargs for network boot
+send_uboot "setenv bootargs 'printk.time=1 mtdparts=$mtdparts mem=64M console=ttyS0,115200 root=/dev/nfs rw nfsroot=${serverip}:${rootpath} ip=${kernel_ip_arg}'\r"
+send_uboot "printenv\r"
+
+# configure bootloader to use a static ip address
+send_uboot "setenv ipaddr $ip_addr\r"
+send_uboot "setenv gatewayip $ip_gateway\r"
+send_uboot "setenv netmask $ip_netmask\r"
+send_uboot "setenv serverip $serverip\r"
+send_uboot "setenv bootfile $bootfile\r"
+
+# load the kernel
+send_uboot "tftp $kernel_loadaddr\r"
+
+# boot the kernel
+send_uboot "bootm $kernel_loadaddr\r"
+
+expect {
+    "Starting kernel" {}
+}
+
+expect {
+    -re "login:" {}
+    -re "." { exp_continue; }
+}
+
+# our work here is done
+puts "\n"
+user_msg "system up; start minicom now!"

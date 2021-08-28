@@ -1,0 +1,5 @@
+#!/bin/sh
+
+# copy ssh keys over to the new system
+# this avoids the need to mount bootblock to grab the keys
+cp /etc/ssh*_key $MNTDIR/etc/

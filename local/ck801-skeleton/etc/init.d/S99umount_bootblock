@@ -1,0 +1,17 @@
+#!/bin/sh
+#
+# unmount the bootblock if it was mounted
+
+. /etc/init.d/functions.sh
+
+#
+# no start/stop/restart argument checking
+# we ALWAYS want to make sure the bootblock is unmounted
+# when this script is run
+#
+
+information "unmounting bootblock partition"
+umount_bootblock
+
+exit $?
+

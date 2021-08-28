@@ -1,0 +1,4 @@
+#!/bin/sh
+
+# copy the interfaces file
+cp /etc/network/interfaces $MNTDIR/etc/network/interfaces

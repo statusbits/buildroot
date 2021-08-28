@@ -1,0 +1,4 @@
+
+ACTION=="add",KERNEL=="sda*", RUN+="/bin/mount -t vfat /dev/sda1 /ctek"
+ACTION=="remove", KERNEL=="sda*", RUN+="/bin/umount /ctek"
+

@@ -1,0 +1,21 @@
+#! /bin/sh
+#
+#
+
+
+case "$1" in
+	start|"")
+		echo 1 > /sys/class/leds/d4-green/brightness
+		echo 1 > /sys/class/leds/d5-yellow/brightness
+		;;
+	stop)
+		echo 0 > /sys/class/leds/d4-green/brightness
+		echo 0 > /sys/class/leds/d5-yellow/brightness
+		;;
+	*)
+		echo "Leds: {start|stop}" >&2
+		exit 1
+		;;
+esac
+
+exit $?

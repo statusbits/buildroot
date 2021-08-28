@@ -1,0 +1,183 @@
+--- u-boot-2009.06.orig/board/atmel/at91sam9260ek/at91sam9260ek.c	2009-06-14 12:30:39.000000000 -0700
++++ u-boot-2009.06/board/atmel/at91sam9260ek/at91sam9260ek.c	2010-05-07 13:58:20.442524000 -0700
+@@ -37,6 +37,8 @@
+ #endif
+ #include <netdev.h>
+ 
++int get_boot_switch(void);   //P.S. for CK415 board
++
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+ /* ------------------------------------------------------------------------- */
+@@ -162,6 +164,12 @@
+ 	at91sam9260ek_macb_hw_init();
+ #endif
+ 
++       at91_set_gpio_input(AT91_PIN_PC4,1);   // SW 1 (DFLT)
++	at91_set_gpio_output(AT91_PIN_PC7,1);
++       at91_set_gpio_output(AT91_PIN_PC6,0);
++       at91_set_gpio_output(AT91_PIN_PB31,1);
++	hw_watchdog_init();
++
+ 	return 0;
+ }
+ 
+@@ -193,3 +200,16 @@
+ #endif
+ 	return rc;
+ }
++
++
++//P.S. for CK415 board 
++// See of boot switch is pressed
++
++int get_boot_switch(void)
++{
++   int ret;
++   
++   ret = (~(at91_get_gpio_value(AT91_PIN_PC4)) & 1) ;
++   return(ret);
++}
++
+
+
+--- u-boot-2009.06.orig/drivers/watchdog/at91sam9_wdt.c	2009-06-14 12:30:39.000000000 -0700
++++ u-boot-2009.06/drivers/watchdog/at91sam9_wdt.c	2010-05-07 13:53:04.681523000 -0700
+@@ -33,7 +33,7 @@
+ #define ticks_to_ms(t)	(((t + 1) * 1000) >> 8)
+ 
+ /* Hardware timeout in seconds */
+-#define WDT_HW_TIMEOUT 2
++#define WDT_HW_TIMEOUT 16
+ 
+ /*
+  * Set the watchdog time interval in 1/256Hz (write-once)
+
+--- u-boot-2009.06/common/main_orig.c	2009-06-14 12:30:39.000000000 -0700
++++ u-boot-2009.06/common/main.c	2012-03-22 13:11:11.808524546 -0700
+@@ -44,6 +44,8 @@
+ DECLARE_GLOBAL_DATA_PTR;
+ #endif
+ 
++extern int get_boot_switch(void);  //P.S. for CK415 board
++
+ /*
+  * Board-specific Platform code can reimplement show_boot_progress () if needed
+  */
+@@ -397,7 +399,13 @@
+ 
+ 	debug ("### main_loop: bootcmd=\"%s\"\n", s ? s : "<UNDEFINED>");
+ 
++
+ 	if (bootdelay >= 0 && s && !abortboot (bootdelay)) {
++
++           // P.S. if switch pressed, boot from network
++           if(get_boot_switch())
++               run_command ("run netboot", 0);
++
+ # ifdef CONFIG_AUTOBOOT_KEYED
+ 		int prev = disable_ctrlc(1);	/* disable Control C checking */
+ # endif
+ 
+--- u-boot-2009.06.orig/include/configs/at91sam9260ek.h	2009-06-14 12:30:39.000000000 -0700
++++ u-boot-2009.06/include/configs/at91sam9260ek.h	2010-04-29 17:13:28.610112838 -0700
+@@ -220,4 +220,8 @@
+ #error CONFIG_USE_IRQ not supported
+ #endif
+ 
++#define CONFIG_HW_WATCHDOG 1
++#define CONFIG_AT91SAM9_WATCHDOG 1
++
++
+ #endif
+diff -urN u-boot-2009.06/tools/env/fw_env.c u-boot-2009.06-ubenv_at_60000/tools/env/fw_env.c
+--- u-boot-2009.06/tools/env/fw_env.c	2009-06-14 12:30:39.000000000 -0700
++++ u-boot-2009.06-ubenv_at_60000/tools/env/fw_env.c	2010-03-25 11:41:57.000000000 -0700
+@@ -218,10 +218,10 @@
+ #endif
+ static inline ulong getenvsize (void)
+ {
+-	ulong rc = CONFIG_ENV_SIZE - sizeof (long);
++	ulong rc = CONFIG_ENV_SIZE - sizeof (uint32_t);
+ 
+ 	if (HaveRedundEnv)
+-		rc -= sizeof (char);
++		rc -= sizeof (unsigned char);
+ 	return rc;
+ }
+ 
+@@ -877,6 +877,8 @@
+ 	return NULL;
+ }
+ 
++
++
+ /*
+  * Prevent confusion if running from erased flash memory
+  */
+@@ -928,7 +930,7 @@
+ 	if (!HaveRedundEnv) {
+ 		if (!crc0_ok) {
+ 			fprintf (stderr,
+-				"Warning: Bad CRC, using default environment\n");
++				"Warning: Bad CRC, using default environment (env.crc=%d, crc=%d)\n", *environment.crc, crc0);
+ 			memcpy(environment.data, default_environment, sizeof default_environment);
+ 		}
+ 	} else {
+diff -urN u-boot-2009.06/tools/env/fw_env.h u-boot-2009.06-ubenv_at_60000/tools/env/fw_env.h
+--- u-boot-2009.06/tools/env/fw_env.h	2009-06-14 12:30:39.000000000 -0700
++++ u-boot-2009.06-ubenv_at_60000/tools/env/fw_env.h	2010-03-25 11:35:57.000000000 -0700
+@@ -27,17 +27,20 @@
+  * See included "fw_env.config" sample file (TRAB board)
+  * for notes on configuration.
+  */
+-#define CONFIG_FILE     "/etc/fw_env.config"
++//#define CONFIG_FILE     "/etc/fw_env.config"
+ 
+ #define HAVE_REDUND /* For systems with 2 env sectors */
+-#define DEVICE1_NAME      "/dev/mtd1"
+-#define DEVICE2_NAME      "/dev/mtd2"
+-#define DEVICE1_OFFSET    0x0000
+-#define ENV1_SIZE         0x4000
+-#define DEVICE1_ESIZE     0x4000
+-#define DEVICE2_OFFSET    0x0000
+-#define ENV2_SIZE         0x4000
+-#define DEVICE2_ESIZE     0x4000
++#define DEVICE1_NAME      "/dev/mtd0"
++#define DEVICE2_NAME      "/dev/mtd0"
++#define DEVICE1_OFFSET    0x60000
++#define ENV1_SIZE         0x20000
++#define DEVICE1_ESIZE     0x20000
++#define DEVICE2_OFFSET    0x80000
++#define ENV2_SIZE         0x20000
++#define DEVICE2_ESIZE     0x20000
++#define DEVICE1_ENVSECTORS     1
++#define DEVICE2_ENVSECTORS     1
++
+ 
+ #define CONFIG_BAUDRATE		115200
+ #define CONFIG_BOOTDELAY	5	/* autoboot after 5 seconds	*/
+
+--- u-boot-2009.06/lib_arm/board_old.c	2011-10-17 13:42:34.258527746 -0700
++++ u-boot-2009.06/lib_arm/board.c	2011-10-17 12:51:16.263654224 -0700
+@@ -161,7 +161,7 @@
+ 
+ static int display_banner (void)
+ {
+-	printf ("\n\n%s\n\n", version_string);
++	printf ("\n\n%s\nCPU=9260\n\n", version_string);
+ 	debug ("U-Boot code: %08lX -> %08lX  BSS: -> %08lX\n",
+ 	       _armboot_start, _bss_start, _bss_end);
+ #ifdef CONFIG_MODEM_SUPPORT
+
+--- u-boot-2009.06/cpu/arm926ejs/at91/at91sam9260_serial_orig.c	2009-06-14 12:30:39.000000000 -0700
++++ u-boot-2009.06/cpu/arm926ejs/at91/at91sam9260_serial.c	2013-01-24 12:37:39.431751497 -0800
+@@ -51,7 +51,7 @@
+ 
+ void at91_serial3_hw_init(void)
+ {
+-	at91_set_A_periph(AT91_PIN_PB14, 0);		/* DRXD */
++	at91_set_A_periph(AT91_PIN_PB14, 1);		/* DRXD */
+ 	at91_set_A_periph(AT91_PIN_PB15, 1);		/* DTXD */
+ 	at91_sys_write(AT91_PMC_PCER, 1 << AT91_ID_SYS);
+ }

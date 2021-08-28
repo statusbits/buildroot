@@ -6,37 +6,38 @@
 # Make sure the ssh-keygen progam exists
 [ -f /usr/bin/ssh-keygen ] || exit 0
 
-# Check for the SSH1 RSA key
-if [ ! -f /etc/ssh_host_key ] ; then
-	echo Generating RSA Key...
-	/usr/bin/ssh-keygen -t rsa1 -f /etc/ssh_host_key -C '' -N ''
-fi
+. /etc/init.d/functions.sh
 
-# Check for the SSH2 RSA key
-if [ ! -f /etc/ssh_host_rsa_key ] ; then
-	echo Generating RSA Key...
-	/usr/bin/ssh-keygen -t rsa -f /etc/ssh_host_rsa_key -C '' -N ''
-fi
+check_ssh_key() {                                                      
+    local name=$1                                                           
+    local type=$2 
+    
+	if [ ! -f /etc/$name ] ; then
+		mount_bootblock
+		if [ -f /etc/bootblock/$name ]; then
+			echo "recovering host $type key from bootblock... "
+		else
+			echo Generating $type key...
+			/usr/bin/ssh-keygen -t $type -f /etc/bootblock/$name -C '' -N ''
+	    fi
+		cp /etc/bootblock/$name /etc/$name
+	fi
+}
 
-# Check for the SSH2 DSA key
-if [ ! -f /etc/ssh_host_dsa_key ] ; then
-	echo Generating DSA Key...
-	echo THIS CAN TAKE A MINUTE OR TWO DEPENDING ON YOUR PROCESSOR!
-	echo
-        /usr/bin/ssh-keygen -t dsa -f /etc/ssh_host_dsa_key -C '' -N ''
-fi
-
-# Check for the SSH2 ECDSA key
-if [ ! -f /etc/ssh_host_ecdsa_key ]; then
-	echo Generating ECDSA Key...
-	echo THIS CAN TAKE A MINUTE OR TWO DEPENDING ON YOUR PROCESSOR!
-	echo
-	/usr/bin/ssh-keygen -t ecdsa -f /etc/ssh_host_ecdsa_key -C '' -N ''
-fi
+#umount_bootblock
                 
-umask 077
+#umask 077
 
 start() {
+	# Check for the SSH1 RSA key
+	#check_ssh_key ssh_host_rsa_key rsa1
+                
+	# Check for the SSH2 DSA key
+	#check_ssh_key ssh_host_dsa_key dsa
+
+	# Check for the SSH2 ecdsa key
+	#check_ssh_key ssh_host_ecdsa_key ecdsa
+
  	echo -n "Starting sshd: "
 	/usr/sbin/sshd
 	touch /var/lock/sshd
@@ -44,7 +45,7 @@ start() {
 }	
 stop() {
 	echo -n "Stopping sshd: "
-        killall	sshd 
+    killall	sshd 
 	rm -f /var/lock/sshd
 	echo "OK" 
 }
@@ -54,18 +55,18 @@ restart() {
 }	
 
 case "$1" in
-  start)
-  	start
-	;;
-  stop)
-  	stop
-	;;
-  restart|reload)
-  	restart
-	;;
-  *)
-	echo "Usage: $0 {start|stop|restart}"
-	exit 1
+    start)
+  	    start
+	    ;;
+    stop)
+  	    stop
+	    ;;
+    restart|reload)
+  	    restart
+	    ;;
+    *)
+	    echo $"Usage: $0 {start|stop|restart}"
+	    exit 1
 esac
 
 exit $?

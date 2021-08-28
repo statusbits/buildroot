@@ -1,0 +1,98 @@
+#!/bin/sh
+#
+# initialize the ethernet hardware interfaces
+#
+
+. /etc/init.d/functions.sh
+
+init_eth_ifaces () {
+    IFACES='eth0 eth1'
+    
+    # skip if we're nfs booting
+    if [ "$(fwtool current_root)" = nfs ]; then
+        return 0
+    fi
+
+    #
+    # copy MAC address files out of /dev/bootblock4
+    #
+    for IFACE in $IFACES; do
+	   if [ ! -f /etc/conf.d/mac.$IFACE ]; then
+	    # mount_bootblock will only ever mount the filesystem one time.
+	        mount_bootblock
+	        /bin/cp /etc/bootblock/mac.$IFACE /etc/conf.d/mac.$IFACE
+	    fi
+    done
+    
+    if [ ! -f /etc/conf.d/mfg_serno ]; then
+        /bin/cp /etc/bootblock/serno /etc/conf.d/mfg_serno
+        /bin/cp /etc/bootblock/release_id /etc/conf.d/mfg_release_id
+    fi
+    umount_bootblock
+
+    #
+    # initialize eth0
+    #  
+    if [ -f /etc/conf.d/mac.eth0 ]; then
+	    . /etc/conf.d/mac.eth0
+    else
+	    MAC="00:40:8C:CD:00:00"
+    fi
+
+    information initializing eth0 MAC = $MAC
+    /sbin/ifconfig eth0 hw ether $MAC
+
+    #
+    # initialize eth1
+    #
+    
+    if [ -f /etc/conf.d/mac.eth1 ]; then
+	    . /etc/conf.d/mac.eth1
+    else
+	    MAC="00:40:8C:CD:00:01"
+    fi
+    
+    information initializing eth1 MAC = $MAC
+    /sbin/ifconfig eth1 hw ether $MAC    
+    
+    # make sure ifup/ifdown doesn't think the interfaces
+    # have already been configured (needed so S40network works)
+    ifdown eth0
+    ifdown eth1
+}
+
+
+#
+#  main init script functions:
+#
+
+start() {
+	init_eth_ifaces
+}	
+
+stop() {
+	warning "$0 stop is not implemented"
+}
+
+restart() {
+	warning "$0 stop is not implemented"
+
+}	
+
+case "$1" in
+    start)
+  	    start
+	    ;;
+    stop)
+  	    stop
+	    ;;
+    restart|reload)
+  	    restart
+	    ;;
+    *)
+	    echo $"Usage: $0 {start|stop|restart}"
+	    exit 1
+esac
+
+exit $?
+
