@@ -6,7 +6,7 @@
 
 PCRE_VERSION = 8.31
 #PCRE_SITE = ftp://ftp.csx.cam.ac.uk/pub/software/programming/pcre
-PCRE_SITE = https://sourceforge.net/projects/pcre/files/pcre/8.31/pcre-8.31.tar.gz/download
+PCRE_SITE = https://sourceforge.net/projects/pcre/files/pcre/$(PCRE_VERSION)/pcre-$(PCRE_VERSION).tar.gz/download
 PCRE_LICENSE = BSD-3c
 PCRE_LICENSE_FILES = LICENCE
 PCRE_INSTALL_STAGING = YES
